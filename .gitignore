@@ -1,0 +1,31 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ambientes virtuais
+.venv/
+env/
+venv/
+ENV/
+
+# IDEs
+.idea/
+.vscode/
+
+# Bancos de dados e dados locais de execução
+*.db
+*.sqlite3
+historico_ferias.db
+
+# Arquivos gerados durante a execução
+PDFs_Separados/
+PDFs_Avisos/
+PDFs_Recibos/
+Relatorio_*.xlsx
+erros_extracao.txt
+
+# PyInstaller / Compilação
+build/
+dist/
+*.spec

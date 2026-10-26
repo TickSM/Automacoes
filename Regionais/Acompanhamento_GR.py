@@ -39,7 +39,7 @@ def buscar_caminho_planilha():
 def criar_janela_status(root, stop_callback):
     status_win = tk.Toplevel(root)
     status_win.title("Monitor da Automação - GR")
-    status_win.geometry("650x450")
+    status_win.geometry("680x480")
     status_win.attributes("-topmost", True)
 
     progress = ttk.Progressbar(status_win, mode='indeterminate')
@@ -66,7 +66,7 @@ def criar_janela_status(root, stop_callback):
 
     def handle_stop():
         btn_stop.config(state='disabled', text="Salvando e Encerrando...")
-        append_log("⚠️ Sinal de interrupção enviado! O robô vai parar e salvar os dados em breve...")
+        append_log("⚠️ Sinal de interrupção enviado! O robô vai finalizar com segurança e salvar os dados...")
         stop_callback()
 
     btn_stop = tk.Button(
@@ -101,7 +101,7 @@ def executar_automacao_gr(config, append_log, stop_event, win_status, progress, 
             messagebox.showerror("Erro", "O arquivo da planilha desapareceu. Automação cancelada.", parent=win_status)
             return
 
-        # Lê processos existentes para pular
+        # Lê processos existentes para não duplicar
         try:
             wb_existente = load_workbook(caminho_excel, read_only=True)
             ws_existente = wb_existente.worksheets[0]
@@ -113,7 +113,7 @@ def executar_automacao_gr(config, append_log, stop_event, win_status, progress, 
         except Exception as e:
             append_log(f"Aviso: Não foi possível ler a planilha existente. Erro: {e}")
 
-        append_log("Abrindo navegador e acessando SEI...")
+        append_log("Abrindo navegador e acessando o SEI...")
         opcoes = Options()
         opcoes.add_argument("--window-size=1920,1080")
         opcoes.add_argument("--disable-gpu")
@@ -143,34 +143,8 @@ def executar_automacao_gr(config, append_log, stop_event, win_status, progress, 
             time.sleep(1)
             radio = driver.find_element(By.ID, "chkInfraItem143")
             driver.execute_script("arguments[0].click();", radio)
+            time.sleep(1.5)
 
-        append_log(f"Aplicando filtros de pesquisa para unidade {config['unidade']}...")
-        campo_pesquisa_rapida = driver.find_element(By.ID, "txtPesquisaRapida")
-        campo_pesquisa_rapida.send_keys(Keys.RETURN)
-        time.sleep(3)
-
-        processos_radio_button = driver.find_element(By.ID, "optProcessos")
-        driver.execute_script("arguments[0].checked = true;", processos_radio_button)
-        driver.execute_script("arguments[0].click();", processos_radio_button)
-
-        campo_unidade_geradora = driver.find_element(By.CSS_SELECTOR, "input#txtUnidade")
-        campo_unidade_geradora.click()
-        for char in config['unidade']:
-            campo_unidade_geradora.send_keys(char)
-            time.sleep(0.5)
-
-        time.sleep(2)
-        campo_unidade_geradora.send_keys(Keys.ARROW_DOWN, Keys.ENTER, Keys.TAB)
-
-        elemento_select = driver.find_element(By.ID, "selTipoProcedimentoPesquisa")
-        dropdown = Select(elemento_select)
-        dropdown.select_by_value("100000470")
-
-        driver.find_element(By.ID, "txtDataInicio").send_keys(config['data_inicio'])
-        driver.find_element(By.ID, "txtDataFim").send_keys(config['data_final'])
-        driver.find_element(By.ID, 'sbmPesquisar').click()
-
-        append_log("Iniciando extração de dados dos processos...")
         processos_detalhes = []
         processos_com_erro = []
 
@@ -199,7 +173,7 @@ def executar_automacao_gr(config, append_log, stop_event, win_status, progress, 
                         try:
                             if cell.value and len(str(cell.value)) > max_length:
                                 max_length = len(str(cell.value))
-                        except:
+                        except Exception:
                             pass
                     ws.column_dimensions[col_letter].width = (max_length + 2)
 
@@ -209,127 +183,234 @@ def executar_automacao_gr(config, append_log, stop_event, win_status, progress, 
             except Exception as e_save:
                 append_log(f"Erro ao tentar salvar a planilha parcial: {e_save}")
 
-        while True:
+        # Lista de UFs a processar
+        lista_ufs = config.get('lista_ufs', ['RJ'])
+        total_ufs = len(lista_ufs)
+        append_log(f"UFs na fila de execução: {', '.join(lista_ufs)} (Total: {total_ufs})")
+
+        estatisticas_execucao = {}
+
+        # ───────────── LOOP PRINCIPAL: ITERAÇÃO POR TODAS AS UFs ─────────────
+        for idx_uf, sigla_uf in enumerate(lista_ufs, 1):
             if stop_event.is_set():
-                append_log("⚠️️ Loop de paginação interrompido pelo usuário.")
+                append_log(f"⚠️ Processamento interrompido. UFs pendentes a partir de {sigla_uf} não serão executadas.")
                 break
 
+            sigla_formatada = sigla_uf.strip().upper()
+            unidade_completa = f"AFD GR/{sigla_formatada}"
+            append_log("\n" + "=" * 55)
+            append_log(f"📍 [{idx_uf}/{total_ufs}] Regional: {sigla_formatada} ({unidade_completa})")
+            append_log("=" * 55)
+
+            novos_extraidos_uf = 0
+
+            # 1. Navega para a tela de pesquisa do SEI
             try:
-                conteudo = driver.find_element(By.ID, "conteudo")
-                elementos_processos = conteudo.find_elements(By.XPATH, './/a[@class="protocoloNormal"]')
-                aba_original = driver.current_window_handle
+                # Aceita eventuais alertas pendentes
+                try:
+                    alert = driver.switch_to.alert
+                    alert.accept()
+                except Exception:
+                    pass
 
-                for elemento in elementos_processos:
-                    if stop_event.is_set():
-                        break
+                driver.switch_to.default_content()
 
-                    numero_processo = elemento.text.strip()
+                campo_pesquisa_rapida = wait.until(EC.presence_of_element_located((By.ID, "txtPesquisaRapida")))
+                campo_pesquisa_rapida.clear()
+                campo_pesquisa_rapida.send_keys(Keys.RETURN)
+                time.sleep(2.5)
+            except Exception as e_nav:
+                append_log(f"Aviso na navegação: {e_nav}. Recarregando página de pesquisa...")
+                driver.get("https://sei.assefaz.org.br/sei/controlador.php?acao=pesquisa_processo_pesquisar")
+                time.sleep(2)
 
-                    if numero_processo in nups_ja_extraidos:
-                        append_log(f"Pulando {numero_processo} - Já extraído.")
-                        continue
+            # 2. Aplica os filtros de pesquisa para a UF atual
+            try:
+                processos_radio_button = wait.until(EC.element_to_be_clickable((By.ID, "optProcessos")))
+                driver.execute_script("arguments[0].checked = true;", processos_radio_button)
+                driver.execute_script("arguments[0].click();", processos_radio_button)
 
-                    append_log(f"Processando: {numero_processo}")
+                campo_unidade_geradora = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "input#txtUnidade")))
+                campo_unidade_geradora.clear()
+                campo_unidade_geradora.click()
+                for char in unidade_completa:
+                    campo_unidade_geradora.send_keys(char)
+                    time.sleep(0.2)
 
-                    try:
-                        unidade_elem = elemento.find_element(By.XPATH, "../../following-sibling::tr//b[contains(text(), 'Unidade:')]/following-sibling::a")
-                        unidade_texto = unidade_elem.text.strip()
-                    except NoSuchElementException:
-                        unidade_texto = "-"
+                time.sleep(1.5)
+                campo_unidade_geradora.send_keys(Keys.ARROW_DOWN, Keys.ENTER, Keys.TAB)
 
-                    try:
-                        td_inclusao = elemento.find_element(By.XPATH, "../../following-sibling::tr//td[b[contains(text(), 'Inclusão:')]]")
-                        texto_inclusao = td_inclusao.get_attribute("textContent")
-                        data_inclusao = texto_inclusao.split(":")[-1].strip().replace('"', '')[:10]
-                    except NoSuchElementException:
-                        data_inclusao = "-"
+                elemento_select = wait.until(EC.presence_of_element_located((By.ID, "selTipoProcedimentoPesquisa")))
+                dropdown = Select(elemento_select)
+                dropdown.select_by_value("100000470")
 
-                    try:
-                        usuario_elem = elemento.find_element(By.XPATH, "../../following-sibling::tr//b[contains(text(), 'Usuário:')]/following-sibling::a")
-                        usuario_nome = usuario_elem.get_attribute("title").strip()
-                        if not usuario_nome:
-                            usuario_nome = usuario_elem.text.strip()
-                    except NoSuchElementException:
-                        usuario_nome = "-"
+                campo_data_ini = driver.find_element(By.ID, "txtDataInicio")
+                campo_data_ini.clear()
+                campo_data_ini.send_keys(config['data_inicio'])
 
-                    try:
-                        driver.execute_script("arguments[0].click();", elemento)
-                    except Exception:
-                        processos_com_erro.append(numero_processo)
-                        continue
+                campo_data_fim = driver.find_element(By.ID, "txtDataFim")
+                campo_data_fim.clear()
+                campo_data_fim.send_keys(config['data_final'])
 
-                    wait.until(lambda d: len(d.window_handles) > 1)
-                    abas = driver.window_handles
-                    driver.switch_to.window(abas[-1])
+                driver.find_element(By.ID, 'sbmPesquisar').click()
+                time.sleep(2)
+            except Exception as e_filtros:
+                append_log(f"❌ Erro ao aplicar filtros para {sigla_formatada}: {e_filtros}")
+                estatisticas_execucao[sigla_formatada] = "Erro nos filtros"
+                continue
 
-                    try:
-                        driver.switch_to.frame("ifrVisualizacao")
-                        formulario = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[@alt='Consultar Processo']")))
-                        formulario.click()
+            # Verifica se apareceu alert do SEI (ex: 'Nenhum processo encontrado')
+            try:
+                alert = driver.switch_to.alert
+                msg_alerta = alert.text
+                alert.accept()
+                append_log(f"Mensagem do SEI para {sigla_formatada}: {msg_alerta}")
+                estatisticas_execucao[sigla_formatada] = 0
+                continue
+            except Exception:
+                pass
 
-                        nome = wait.until(EC.presence_of_element_located((By.XPATH, "//*[@id='txtDescricao']")))
-                        valor_nome = nome.get_attribute("value")
-
-                        try:
-                            xpath_observacao = "//th[text()='Observação']/parent::tr/following-sibling::tr[1]/td[2]"
-                            elem_status = driver.find_element(By.XPATH, xpath_observacao)
-                            texto_bruto = elem_status.get_attribute("innerText").strip().upper()
-                            
-                            if "2 PROJETO DIGITALIZAÇÃO" in texto_bruto or "2 PROJETO DE DIGITALIZAÇÃO" in texto_bruto:
-                                valor_status = "INATIVO" if "INATIVO" in texto_bruto else "ATIVO"
-                                append_log(f"  ↳ [INCLUÍDO] Pertence à 2ª etapa do projeto ({valor_status}).")
-                            else:
-                                append_log(f"  ↳ [IGNORADO] Não pertence à 2ª etapa do projeto de digitalização.")
-                                continue 
-                        except NoSuchElementException:
-                            append_log(f"  ↳ [IGNORADO] Campo de observação vazio ou inexistente.")
-                            continue
-                            
-                        processos_detalhes.append([valor_nome, numero_processo, unidade_texto, usuario_nome, data_inclusao, valor_status])
-
-                    except Exception as e:
-                        append_log(f"  ↳ Erro no processo {numero_processo}: {type(e).__name__}")
-                        processos_com_erro.append(numero_processo)
-                    finally:
-                        driver.switch_to.default_content()
-                        driver.close()
-                        driver.switch_to.window(aba_original)
-
-                # Salva o progresso ao final da página
-                salvar_parcial()
-                
+            # 3. Paginação de resultados da UF atual
+            pagina_atual = 1
+            while True:
                 if stop_event.is_set():
+                    append_log("⚠️ Paginação interrompida pelo usuário.")
                     break
 
                 try:
-                    link_proxima = wait.until(EC.element_to_be_clickable((By.LINK_TEXT, "Próxima")))
-                    driver.execute_script("arguments[0].click();", link_proxima)
-                    time.sleep(1.5)
-                except (NoSuchElementException, TimeoutException):
+                    conteudo = driver.find_element(By.ID, "conteudo")
+                    elementos_processos = conteudo.find_elements(By.XPATH, './/a[@class="protocoloNormal"]')
+
+                    if not elementos_processos:
+                        append_log(f"Nenhum processo listado na página {pagina_atual} para {sigla_formatada}.")
+                        break
+
+                    aba_original = driver.current_window_handle
+
+                    for elemento in elementos_processos:
+                        if stop_event.is_set():
+                            break
+
+                        numero_processo = elemento.text.strip()
+
+                        if numero_processo in nups_ja_extraidos:
+                            append_log(f"Pulando {numero_processo} - Já extraído.")
+                            continue
+
+                        append_log(f"Processando: {numero_processo}")
+
+                        try:
+                            unidade_elem = elemento.find_element(By.XPATH, "../../following-sibling::tr//b[contains(text(), 'Unidade:')]/following-sibling::a")
+                            unidade_texto = unidade_elem.text.strip()
+                        except NoSuchElementException:
+                            unidade_texto = "-"
+
+                        try:
+                            td_inclusao = elemento.find_element(By.XPATH, "../../following-sibling::tr//td[b[contains(text(), 'Inclusão:')]]")
+                            texto_inclusao = td_inclusao.get_attribute("textContent")
+                            data_inclusao = texto_inclusao.split(":")[-1].strip().replace('"', '')[:10]
+                        except NoSuchElementException:
+                            data_inclusao = "-"
+
+                        try:
+                            usuario_elem = elemento.find_element(By.XPATH, "../../following-sibling::tr//b[contains(text(), 'Usuário:')]/following-sibling::a")
+                            usuario_nome = usuario_elem.get_attribute("title").strip()
+                            if not usuario_nome:
+                                usuario_nome = usuario_elem.text.strip()
+                        except NoSuchElementException:
+                            usuario_nome = "-"
+
+                        try:
+                            driver.execute_script("arguments[0].click();", elemento)
+                        except Exception:
+                            processos_com_erro.append(numero_processo)
+                            continue
+
+                        wait.until(lambda d: len(d.window_handles) > 1)
+                        abas = driver.window_handles
+                        driver.switch_to.window(abas[-1])
+
+                        try:
+                            driver.switch_to.frame("ifrVisualizacao")
+                            formulario = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[@alt='Consultar Processo']")))
+                            formulario.click()
+
+                            nome = wait.until(EC.presence_of_element_located((By.XPATH, "//*[@id='txtDescricao']")))
+                            valor_nome = nome.get_attribute("value")
+
+                            try:
+                                xpath_observacao = "//th[text()='Observação']/parent::tr/following-sibling::tr[1]/td[2]"
+                                elem_status = driver.find_element(By.XPATH, xpath_observacao)
+                                texto_bruto = elem_status.get_attribute("innerText").strip().upper()
+                                
+                                if "2 PROJETO DIGITALIZAÇÃO" in texto_bruto or "2 PROJETO DE DIGITALIZAÇÃO" in texto_bruto:
+                                    valor_status = "INATIVO" if "INATIVO" in texto_bruto else "ATIVO"
+                                    append_log(f"  ↳ [INCLUÍDO] Pertence à 2ª etapa do projeto ({valor_status}).")
+                                else:
+                                    append_log(f"  ↳ [IGNORADO] Não pertence à 2ª etapa do projeto de digitalização.")
+                                    continue 
+                            except NoSuchElementException:
+                                append_log(f"  ↳ [IGNORADO] Campo de observação vazio ou inexistente.")
+                                continue
+                                
+                            processos_detalhes.append([valor_nome, numero_processo, unidade_texto, usuario_nome, data_inclusao, valor_status])
+                            nups_ja_extraidos.add(numero_processo)
+                            novos_extraidos_uf += 1
+
+                        except Exception as e:
+                            append_log(f"  ↳ Erro no processo {numero_processo}: {type(e).__name__}")
+                            processos_com_erro.append(numero_processo)
+                        finally:
+                            driver.switch_to.default_content()
+                            driver.close()
+                            driver.switch_to.window(aba_original)
+
+                    # Salva o progresso ao final de cada página
+                    salvar_parcial()
+                    
+                    if stop_event.is_set():
+                        break
+
+                    try:
+                        link_proxima = wait.until(EC.element_to_be_clickable((By.LINK_TEXT, "Próxima")))
+                        driver.execute_script("arguments[0].click();", link_proxima)
+                        pagina_atual += 1
+                        time.sleep(1.5)
+                    except (NoSuchElementException, TimeoutException):
+                        break
+
+                except Exception as e:
+                    append_log(f"Erro na navegação da tabela: {e}")
                     break
 
-            except Exception as e:
-                append_log(f"Erro na navegação da tabela: {e}")
-                break
+            estatisticas_execucao[sigla_formatada] = novos_extraidos_uf
+            append_log(f"✔ Finalizada UF {sigla_formatada}. Novos registros salvos: {novos_extraidos_uf}")
+            salvar_parcial(forcar_atualizacao=True)
 
+        # ───────────── RESUMO FINAL DE TODAS AS UFs ─────────────
         if stop_event.is_set():
             append_log("Gerando salvamento final devido à interrupção...")
         else:
-            append_log("Atualizando relatório excel pela última vez...")
+            append_log("Atualizando relatório final da execução...")
 
         salvar_parcial(forcar_atualizacao=True)
 
+        append_log("\n" + "=" * 55)
+        append_log("🏁 RELATÓRIO CONSOLIDADO DO PROCESSAMENTO:")
+        for uf_item, qtd_item in estatisticas_execucao.items():
+            append_log(f"   • {uf_item}: {qtd_item} processo(s) novo(s)")
+        append_log("=" * 55)
+
         if processos_com_erro:
             append_log(f"Atenção: {len(processos_com_erro)} processos apresentaram erro.")
-            # Salva relatório de erros na mesma pasta da planilha
             pasta_destino = os.path.dirname(caminho_excel)
             with open(os.path.join(pasta_destino, "erros_extracao.txt"), "w") as f:
                 f.write("\n".join(processos_com_erro))
 
-        append_log("✔ Processamento finalizado! Os dados estão salvos e seguros.")
+        append_log("✔ Processamento finalizado! Os dados estão salvos e seguros na planilha.")
 
     except Exception as e:
-        append_log("⚠️️ ERRO CRÍTICO! Tentando salvar dados residuais...")
+        append_log("⚠️ ERRO CRÍTICO! Tentando salvar dados residuais...")
         try:
             salvar_parcial()
         except Exception:
@@ -363,52 +444,148 @@ class InterfaceInicialGR(ctk.CTk):
         super().__init__()
 
         self.title("Automação Digitalização GR - SEI")
-        self.geometry("450x380")
+        self.geometry("490x510")
         self.resizable(False, False)
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
 
         self.lbl_titulo = ctk.CTkLabel(self, text="Digitalização GR - SEI", font=("Arial", 20, "bold"))
-        self.lbl_titulo.pack(pady=(25, 5))
+        self.lbl_titulo.pack(pady=(20, 5))
 
-        self.lbl_subtitulo = ctk.CTkLabel(self, text="Informe as credenciais e a Unidade", font=("Arial", 12), text_color="gray70")
+        self.lbl_subtitulo = ctk.CTkLabel(
+            self, 
+            text="Informe suas credenciais e selecione as Regionais (UFs)", 
+            font=("Arial", 12), 
+            text_color="gray70"
+        )
         self.lbl_subtitulo.pack(pady=(0, 15))
 
         self.frame_form = ctk.CTkFrame(self, fg_color="transparent")
-        self.frame_form.pack(pady=5, padx=20, fill="x")
+        self.frame_form.pack(pady=5, padx=25, fill="x")
 
         # Campo Usuário
-        ctk.CTkLabel(self.frame_form, text="Usuário SEI:", font=("Arial", 13, "bold")).grid(row=0, column=0, padx=10, pady=10, sticky="e")
-        self.ent_usuario = ctk.CTkEntry(self.frame_form, width=220, placeholder_text="nome.sobrenome")
-        self.ent_usuario.grid(row=0, column=1, padx=5, pady=10)
+        ctk.CTkLabel(self.frame_form, text="Usuário SEI:", font=("Arial", 13, "bold")).grid(row=0, column=0, padx=10, pady=8, sticky="e")
+        self.ent_usuario = ctk.CTkEntry(self.frame_form, width=230, placeholder_text="nome.sobrenome")
+        self.ent_usuario.grid(row=0, column=1, padx=5, pady=8)
 
         # Campo Senha
-        ctk.CTkLabel(self.frame_form, text="Senha:", font=("Arial", 13, "bold")).grid(row=1, column=0, padx=10, pady=10, sticky="e")
-        self.ent_senha = ctk.CTkEntry(self.frame_form, width=220, show="*")
-        self.ent_senha.grid(row=1, column=1, padx=5, pady=10)
+        ctk.CTkLabel(self.frame_form, text="Senha:", font=("Arial", 13, "bold")).grid(row=1, column=0, padx=10, pady=8, sticky="e")
+        self.ent_senha = ctk.CTkEntry(self.frame_form, width=230, show="*")
+        self.ent_senha.grid(row=1, column=1, padx=5, pady=8)
 
-        # Campo Unidade (Sigla)
-        ctk.CTkLabel(self.frame_form, text="Sigla (Estado):", font=("Arial", 13, "bold")).grid(row=2, column=0, padx=10, pady=10, sticky="e")
-        self.ent_sigla = ctk.CTkEntry(self.frame_form, width=220, placeholder_text="Ex: RJ, SP, BA...")
-        self.ent_sigla.grid(row=2, column=1, padx=5, pady=10)
+        # Divisor / Título da Seção de UFs
+        ctk.CTkLabel(
+            self.frame_form, 
+            text="Regionais (UFs):", 
+            font=("Arial", 13, "bold")
+        ).grid(row=2, column=0, padx=10, pady=(15, 5), sticky="ne")
+
+        # Frame de Seleção de UFs
+        self.frame_ufs_container = ctk.CTkFrame(self.frame_form, fg_color="#2b2b2b", corner_radius=8)
+        self.frame_ufs_container.grid(row=2, column=1, padx=5, pady=(15, 5), sticky="w")
+
+        # Checkboxes das UFs padrão (RJ, SP, BA) pré-marcadas
+        self.chk_vars = {}
+        frame_chk = ctk.CTkFrame(self.frame_ufs_container, fg_color="transparent")
+        frame_chk.pack(padx=10, pady=(8, 4), fill="x")
+
+        ufs_padrao = ["RJ", "SP", "BA"]
+        for uf in ufs_padrao:
+            var = ctk.BooleanVar(value=True)
+            chk = ctk.CTkCheckBox(frame_chk, text=uf, variable=var, font=("Arial", 12, "bold"), width=60)
+            chk.pack(side="left", padx=4)
+            self.chk_vars[uf] = var
+
+        # Botões de atalho: Todas / Nenhuma
+        frame_atalhos = ctk.CTkFrame(self.frame_ufs_container, fg_color="transparent")
+        frame_atalhos.pack(padx=10, pady=(2, 8), fill="x")
+
+        btn_todas = ctk.CTkButton(
+            frame_atalhos, 
+            text="Marcar Todas", 
+            width=90, 
+            height=24, 
+            font=("Arial", 10), 
+            command=self.marcar_todas
+        )
+        btn_todas.pack(side="left", padx=(0, 5))
+
+        btn_nenhuma = ctk.CTkButton(
+            frame_atalhos, 
+            text="Desmarcar", 
+            width=80, 
+            height=24, 
+            font=("Arial", 10), 
+            fg_color="#555555", 
+            hover_color="#444444", 
+            command=self.desmarcar_todas
+        )
+        btn_nenhuma.pack(side="left")
+
+        # Campo para adicionar novas UFs no futuro
+        ctk.CTkLabel(
+            self.frame_form, 
+            text="Outras UFs:", 
+            font=("Arial", 13, "bold")
+        ).grid(row=3, column=0, padx=10, pady=10, sticky="e")
+
+        self.ent_outras_ufs = ctk.CTkEntry(
+            self.frame_form, 
+            width=230, 
+            placeholder_text="Ex: MG, PR, DF (separadas por vírgula)"
+        )
+        self.ent_outras_ufs.grid(row=3, column=1, padx=5, pady=10)
+
+        # Informação amigável
+        self.lbl_info = ctk.CTkLabel(
+            self, 
+            text="💡 O robô processará todas as UFs selecionadas em sequência\nautomaticamente, com apenas um clique.", 
+            font=("Arial", 11), 
+            text_color="#85c1e9"
+        )
+        self.lbl_info.pack(pady=(10, 5))
 
         self.btn_iniciar = ctk.CTkButton(
             self, 
-            text="Iniciar Automação", 
+            text="🚀 Iniciar Automação", 
             font=("Arial", 14, "bold"),
             height=42,
-            width=260,
+            width=280,
             command=self.iniciar_processamento
         )
-        self.btn_iniciar.pack(pady=20)
+        self.btn_iniciar.pack(pady=15)
+
+    def marcar_todas(self):
+        for var in self.chk_vars.values():
+            var.set(True)
+
+    def desmarcar_todas(self):
+        for var in self.chk_vars.values():
+            var.set(False)
+
+    def obter_ufs_selecionadas(self):
+        ufs = [uf for uf, var in self.chk_vars.items() if var.get()]
+        
+        texto_outras = self.ent_outras_ufs.get().strip()
+        if texto_outras:
+            partes = re.split(r'[,;\s]+', texto_outras)
+            for parte in partes:
+                sigla = parte.strip().upper()
+                if sigla and sigla not in ufs:
+                    ufs.append(sigla)
+        return ufs
 
     def iniciar_processamento(self):
         usuario = self.ent_usuario.get().strip()
         senha = self.ent_senha.get().strip()
-        sigla = self.ent_sigla.get().strip().upper()
+        lista_ufs = self.obter_ufs_selecionadas()
 
-        if not usuario or not senha or not sigla:
-            messagebox.showwarning("Atenção", "Por favor, preencha todos os campos!")
+        if not usuario or not senha:
+            messagebox.showwarning("Atenção", "Por favor, preencha o Usuário e a Senha!")
+            return
+
+        if not lista_ufs:
+            messagebox.showwarning("Atenção", "Por favor, selecione ao menos uma UF (ou digite no campo Outras UFs)!")
             return
 
         # Verifica e valida o caminho da planilha
@@ -435,7 +612,7 @@ class InterfaceInicialGR(ctk.CTk):
             'data_inicio': '27/07/2026', # Data travada
             'data_final': '31/12/2029',  # Data travada
             'caminho_excel': caminho_excel,
-            'unidade': f"AFD GR/{sigla}" # Formatação automatizada
+            'lista_ufs': lista_ufs
         }
 
         self.withdraw()

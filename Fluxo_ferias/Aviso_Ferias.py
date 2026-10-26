@@ -10,6 +10,7 @@ import pyperclip
 import pandas as pd
 import re
 import sys
+from banco_ferias import registrar_aviso
 
 
 # Descobre o caminho real onde o programa (ou .exe) está rodando
@@ -146,6 +147,13 @@ def executar_robo_sei(app_gui, mes_ano, usuario, senha):
                         "Processo": numero_processo,
                         "Interessados": nomes_formatados
                     })
+
+                    # Salva no histórico local para conciliação automática com a etapa de recibos
+                    try:
+                        registrar_aviso(mes_ano, unidade, numero_processo, nomes_extraidos)
+                        app_gui.atualizar_status("  ↳ Registrado no histórico local para conciliação automática!")
+                    except Exception as e_banco:
+                        app_gui.atualizar_status(f"  [Aviso Banco] {e_banco}")
                     # ---------------------------------------------------------
 
                     # entrando no iframe visualização

@@ -5,6 +5,7 @@ import os
 import re
 import sys
 from pypdf import PdfReader, PdfWriter
+from extrator_inteligente import processar_pagina_pdf, verificar_ia_local
 
 # Configuração de diretório para o PyInstaller
 if getattr(sys, 'frozen', False):
@@ -22,6 +23,12 @@ def executar_separacao(app_gui, caminho_pdf, unidade_padrao):
 
         app_gui.atualizar_status(f"Abrindo arquivo:\n{os.path.basename(caminho_pdf)}\n")
         
+        # Checa status da IA Local
+        if verificar_ia_local():
+            app_gui.atualizar_status("🤖 IA Local (Ollama) conectada! Modo Inteligente ativo.\n")
+        else:
+            app_gui.atualizar_status("ℹ️ IA Local não detectada. Utilizando Extrator Heurístico Local (Regras).\n")
+            
         reader = PdfReader(caminho_pdf)
         total_paginas = len(reader.pages)
         app_gui.atualizar_status(f"Total de páginas encontradas: {total_paginas}\n")
@@ -30,36 +37,10 @@ def executar_separacao(app_gui, caminho_pdf, unidade_padrao):
             pagina = reader.pages[i]
             texto_cru = pagina.extract_text() or ""
             
-            # Limpa o texto: joga tudo para uma linha só
-            texto_limpo = texto_cru.replace('\n', ' ').replace('\r', ' ')
-            
-            nome_cru = ""
-            unidade_cru = ""
-
-            # =======================================================
-            # REGRA 1: É UM RECIBO DE FÉRIAS?
-            # =======================================================
-            if "Empregado" in texto_limpo:
-                match_nome = re.search(r'Empregado[^\:]*:\s*([^|]+)', texto_limpo, re.IGNORECASE)
-                if match_nome:
-                    nome_cru = match_nome.group(1).strip()
-                unidade_cru = ""
-
-            # =======================================================
-            # REGRA 2: É UM AVISO DE FÉRIAS?
-            # =======================================================
-            elif "SR(A)" in texto_limpo.upper() or "AVISO" in texto_limpo.upper():
-                # NOVO: Busca Reversa! Pega apenas letras MAIÚSCULAS imediatamente antes do CTPS
-                # (Não usamos re.IGNORECASE aqui para forçar ele a pular letras minúsculas de datas)
-                match_nome = re.search(r'([A-ZÀ-Ú][A-ZÀ-Ú \.]{8,})(?=[\d\W]*CTPS)', texto_limpo)
-                if match_nome:
-                    nome_cru = match_nome.group(1).strip()
-                
-                # Departamento
-                match_depto = re.search(r'DEPTO[\W_]*([A-ZÀ-Úa-zà-ú \-]+)', texto_limpo, re.IGNORECASE)
-                if match_depto:
-                    unidade_cru = match_depto.group(1).strip()
-                    unidade_cru = re.sub(r'(?i)\s*Comunicamos.*', '', unidade_cru).strip()
+            # Extração inteligente (tenta IA Local, senão usa regras resilientes)
+            dados_extraidos, motor = processar_pagina_pdf(texto_cru, unidade_padrao)
+            nome_cru = dados_extraidos.get("nome", "")
+            unidade_cru = dados_extraidos.get("unidade", "")
 
             # =======================================================
             # TRATAMENTO E SALVAMENTO
@@ -90,7 +71,7 @@ def executar_separacao(app_gui, caminho_pdf, unidade_padrao):
             if "FUNCIONARIO_PAGINA" in nome_formatado:
                 app_gui.atualizar_status(f"⚠️ Salvo como {nome_arquivo_saida}")
             else:
-                app_gui.atualizar_status(f"✔ Salvo: {nome_arquivo_saida}")
+                app_gui.atualizar_status(f"✔ [{motor}] Salvo: {nome_arquivo_saida}")
         
         app_gui.atualizar_status("\n===============================")
         app_gui.atualizar_status("Separação concluída com sucesso!")

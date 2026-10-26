@@ -8,6 +8,7 @@ from playwright.sync_api import sync_playwright
 from datetime import datetime
 import pandas as pd
 import openpyxl
+from banco_ferias import buscar_aviso_por_funcionario, registrar_recibo
 
 
 
@@ -120,21 +121,32 @@ def executar_robo_sei(app_gui, mes_ano, usuario, senha, caminho_excel):
                     app_gui.atualizar_status(f"\n➤ Criando processo para: {nome} ({unidade})")
                 
                     processo_aviso_vinculado = None
-                    status_do_vinculo = "NÃO SE APLICA (SEM PLANILHA)"
+                    status_do_vinculo = "NÃO SE APLICA (SEM VÍNCULO)"
 
-                    # SÓ BUSCA E EXIGE O AVISO SE A PLANILHA FOI ANEXADA
-                    if caminho_excel:
+                    # 1. Tenta localizar automaticamente no histórico local (banco SQLite)
+                    try:
+                        processo_aviso_vinculado = buscar_aviso_por_funcionario(nome, mes_ano)
+                        if processo_aviso_vinculado:
+                            app_gui.atualizar_status(f"  ↳ Aviso localizado no histórico local: {processo_aviso_vinculado}")
+                    except Exception:
+                        processo_aviso_vinculado = None
+
+                    # 2. Se não achou no banco, tenta na planilha caso tenha sido informada
+                    if not processo_aviso_vinculado and caminho_excel and dados_planilha:
                         processo_aviso_vinculado = encontrar_processo_aviso(unidade, nome, dados_planilha)
+                        if processo_aviso_vinculado:
+                            app_gui.atualizar_status(f"  ↳ Aviso localizado na planilha: {processo_aviso_vinculado}")
 
-                        if not processo_aviso_vinculado:
-                            app_gui.atualizar_status(f"  [ERRO] Processo de Aviso não encontrado na planilha para {nome}. Pulando funcionário...")
-                            relatorio_processos.append({
-                                "Funcionário": nome,
-                                "Processo do Recibo": "NÃO GERADO - AVISO NÃO ENCONTRADO",
-                                "Processo do Aviso Vinculado": "NÃO ENCONTRADO"
-                            })
-                            continue
+                    if processo_aviso_vinculado:
                         app_gui.atualizar_status(f"  ↳ Será vinculado ao Aviso Nº: {processo_aviso_vinculado}")
+                    elif caminho_excel:
+                        app_gui.atualizar_status(f"  [ERRO] Aviso não encontrado no histórico nem na planilha para {nome}. Pulando funcionário...")
+                        relatorio_processos.append({
+                            "Funcionário": nome,
+                            "Processo do Recibo": "NÃO GERADO - AVISO NÃO ENCONTRADO",
+                            "Processo do Aviso Vinculado": "NÃO ENCONTRADO"
+                        })
+                        continue
                     else:
                         app_gui.atualizar_status("  ↳ Gerando processo avulso (sem vinculação)...")
 
@@ -222,6 +234,12 @@ def executar_robo_sei(app_gui, mes_ano, usuario, senha, caminho_excel):
                         "Processo do Recibo": numero_processo_novo,
                         "Processo do Aviso Vinculado": status_do_vinculo
                     })
+
+                    # Salva no histórico local para rastreabilidade
+                    try:
+                        registrar_recibo(mes_ano, nome, numero_processo_novo, processo_aviso_vinculado, status_do_vinculo)
+                    except Exception:
+                        pass
 
                     # ==========================================
                     # INCLUSÃO DO DOCUMENTO INTERNO

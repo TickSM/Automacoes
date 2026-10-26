@@ -9,13 +9,15 @@ A maioria dos projetos utiliza a biblioteca **Selenium** ou **Playwright** para 
 O repositório está organizado nas seguintes pastas, cada uma focada em uma frente de automação específica:
 
 *   [**506**](./506): Scripts focados no projeto de digitalização (Projeto 506), incluindo a criação automatizada de processos no sistema SEI e a extração e consolidação de dados de acervos arquivísticos.
-*   [**Fluxo_ferias**](./Fluxo_ferias): Automações para o setor de RH. Inclui ferramentas para fatiar PDFs, criar processos de aviso de férias no SEI e gerar recibos de férias, vinculando-os aos processos adequados.
+*   [**Fluxo_ferias**](./Fluxo_ferias): Automações para o setor de RH com suporte a **IA Open Source Local (Ollama)** para parsing inteligente de PDFs e banco de dados SQLite para **conciliação e vinculação automática** entre avisos e recibos no SEI sem necessidade de planilhas manuais.
 *   [**Outros**](./Outros): Contém ferramentas gerais para geração de relatórios de desempenho e relatórios de extração de dados do SEI (Versão 4.2).
-*   [**Regionais**](./Regionais): Script direcionado para o acompanhamento e extração de dados da digitalização na Gerência Regional (GR).
+*   [**Regionais**](./Regionais): Script para acompanhamento e extração de dados da digitalização na Gerência Regional (GR), com suporte a **execução em lote de múltiplas UFs em sequência** (RJ, SP, BA e personalizadas).
 
 ## 🛠️ Tecnologias Utilizadas
 
 *   **Linguagem:** Python
+*   **Inteligência Artificial (LLM Local):** Ollama (Llama 3.2 / Qwen 2.5) com fallback resiliente para extração determinística
+*   **Banco de Dados:** SQLite (persistência de processos e conciliação)
 *   **Interface Gráfica (GUI):** Tkinter e CustomTkinter
 *   **Automação Web:** Selenium WebDriver e Playwright
 *   **Manipulação de Dados e Planilhas:** Pandas e OpenPyXL
