@@ -9,6 +9,7 @@ Esta pasta abriga os projetos criados para otimizar o fluxo de férias, reduzind
 *   **`Fatiador.py`**: Utilitário com interface gráfica que separa o PDF compilado em arquivos individuais, agora integrado ao `extrator_inteligente` para identificação de nome e unidade.
 *   **`Aviso_Ferias.py`**: Automação em `Playwright` que cria os processos de aviso no SEI por Unidade e salva os registros tanto em Excel quanto no banco local de conciliação.
 *   **`Recibo_Ferias.py`**: Automação em `Playwright` que cria os processos de recibos individuais e faz a vinculação automática com o aviso correspondente, consultando o banco local automaticamente (com fallback para planilha se fornecida).
+*   **`Painel_Auditoria_Ferias.py`**: Interface gráfica moderna de **Auditoria e Relatórios** para o usuário e gestão de RH. Exibe cards de métricas (total de avisos, recibos e pendências), tabela interativa com busca em tempo real por funcionário, filtros por Mês/Ano e Status, além de botão para **exportação de relatórios em Excel (.xlsx) com layout profissional** e estilização visual.
 
 ## 🚀 Como Utilizar
 
