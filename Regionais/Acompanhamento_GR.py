@@ -226,9 +226,9 @@ def executar_automacao_gr(config, append_log, stop_event, win_status, progress, 
 
             # 2. Aplica os filtros de pesquisa para a UF atual
             try:
-                processos_radio_button = wait.until(EC.element_to_be_clickable((By.ID, "optProcessos")))
-                driver.execute_script("arguments[0].checked = true;", processos_radio_button)
-                driver.execute_script("arguments[0].click();", processos_radio_button)
+                # Usa o ID da label e o clique nativo do Selenium
+                label_processos = wait.until(EC.element_to_be_clickable((By.ID, "lblProcessos")))
+                label_processos.click()
 
                 campo_unidade_geradora = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "input#txtUnidade")))
                 campo_unidade_geradora.clear()
