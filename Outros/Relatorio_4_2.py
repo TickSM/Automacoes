@@ -10,6 +10,8 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
 from openpyxl.utils import get_column_letter
 from datetime import datetime
+from selenium.common.exceptions import NoSuchElementException
+import unicodedata
 import os
 import json
 import re
@@ -20,6 +22,92 @@ import time
 # ───────────── FUNÇÕES DE APOIO ─────────────
 def limpar_nome_arquivo(nome):
     return re.sub(r'[\\/*?:"<>|]', "-", nome)
+
+
+def normalizar_texto(texto):
+    if not texto:
+        return ""
+    texto = str(texto)
+    nfkd = unicodedata.normalize('NFKD', texto)
+    sem_acento = "".join([c for c in nfkd if not unicodedata.combining(c)])
+    sem_acento = re.sub(r'[\u2010-\u2015\u2212]', '-', sem_acento)
+    return " ".join(sem_acento.replace('\xa0', ' ').lower().split())
+
+
+def selecionar_opcao(select_element, texto_busca):
+    if not texto_busca or not str(texto_busca).strip():
+        return
+    
+    texto_busca_limpo = str(texto_busca).strip()
+    select = Select(select_element)
+    
+    # 1. Tentativa direta com o texto exato
+    try:
+        select.select_by_visible_text(texto_busca_limpo)
+        return
+    except Exception:
+        pass
+
+    opcoes = select.options
+    busca_norm = normalizar_texto(texto_busca_limpo)
+    
+    # 2. Correspondência exata normalizada (sem acentos, minúsculas, hífens padronizados)
+    for opt in opcoes:
+        opt_text = opt.text.strip()
+        if normalizar_texto(opt_text) == busca_norm:
+            val = opt.get_attribute("value")
+            if val is not None:
+                select.select_by_value(val)
+            else:
+                select.select_by_visible_text(opt_text)
+            return
+
+    # 3. Correspondência parcial (termo procurado contido na opção ou vice-versa)
+    candidatos = []
+    for opt in opcoes:
+        opt_text = opt.text.strip()
+        opt_norm = normalizar_texto(opt_text)
+        if busca_norm in opt_norm or opt_norm in busca_norm:
+            candidatos.append(opt)
+    
+    if candidatos:
+        candidatos.sort(key=lambda o: 0 if normalizar_texto(o.text).startswith(busca_norm) else 1)
+        val = candidatos[0].get_attribute("value")
+        if val is not None:
+            select.select_by_value(val)
+        else:
+            select.select_by_visible_text(candidatos[0].text.strip())
+        return
+
+    # 4. Correspondência por palavras-chave relevantes
+    palavras = [p for p in busca_norm.split() if len(p) >= 3 and p != '-']
+    if palavras:
+        candidatos_palavras = []
+        for opt in opcoes:
+            opt_norm = normalizar_texto(opt.text)
+            if all(p in opt_norm for p in palavras):
+                candidatos_palavras.append(opt)
+        if candidatos_palavras:
+            val = candidatos_palavras[0].get_attribute("value")
+            if val is not None:
+                select.select_by_value(val)
+            else:
+                select.select_by_visible_text(candidatos_palavras[0].text.strip())
+            return
+
+    # 5. Se nenhuma opção bater, lista opções semelhantes encontradas no menu
+    sugestoes = []
+    if palavras:
+        for opt in opcoes:
+            opt_text = opt.text.strip()
+            opt_norm = normalizar_texto(opt_text)
+            if any(p in opt_norm for p in palavras):
+                sugestoes.append(opt_text)
+
+    msg_erro = f"Não foi possível localizar '{texto_busca_limpo}' no menu do SEI."
+    if sugestoes:
+        msg_erro += "\n\nOpções semelhantes disponíveis:\n" + "\n".join(f"• {s}" for s in sugestoes[:10])
+    raise NoSuchElementException(msg_erro)
 
 driver = None
 
@@ -77,6 +165,7 @@ def coletar_dados(root):
     campos_str_var = tk.StringVar(value=", ".join(config_anterior.get('lista_campos_excel', [])) or "TODOS")
     data_inicio_var = tk.StringVar(value=config_anterior.get('data_inicio', ''))
     data_final_var = tk.StringVar(value=config_anterior.get('data_final', ''))
+    pesquisar_processos_var = tk.BooleanVar(value=config_anterior.get('pesquisar_processos', True))
     tramitacao_var = tk.BooleanVar(value=config_anterior.get('tramitacao', False))
     caminho_var = tk.StringVar(
         value=config_anterior.get('caminho_salvamento', os.path.join(os.path.expanduser("~"), "Desktop")))
@@ -105,14 +194,13 @@ def coletar_dados(root):
     add_field("Data Início (DD/MM/AAAA):", data_inicio_var)
     add_field("Data Final (DD/MM/AAAA):", data_final_var)
 
-    # Layout do Checkbox e Salvamento
-    ttk.Checkbutton(frame, text="Pesquisar com Tramitação na Unidade", variable=tramitacao_var).grid(row=10, column=0,
-                                                                                                     columnspan=2,
-                                                                                                     sticky="w", pady=5)
+    # Layout dos Checkboxes e Salvamento
+    ttk.Checkbutton(frame, text="Pesquisar por Processos (marcar opção 'Processos')", variable=pesquisar_processos_var).grid(row=10, column=0, columnspan=2, sticky="w", pady=3)
+    ttk.Checkbutton(frame, text="Pesquisar com Tramitação na Unidade", variable=tramitacao_var).grid(row=11, column=0, columnspan=2, sticky="w", pady=3)
 
-    ttk.Label(frame, text="Salvar em:").grid(row=11, column=0, sticky="w", pady=3)
+    ttk.Label(frame, text="Salvar em:").grid(row=12, column=0, sticky="w", pady=3)
     caminho_frame = ttk.Frame(frame)
-    caminho_frame.grid(row=11, column=1, sticky="w", pady=3)
+    caminho_frame.grid(row=12, column=1, sticky="w", pady=3)
     ttk.Entry(caminho_frame, textvariable=caminho_var, width=33).pack(side="left", padx=(5, 2))
 
     def selecionar_pasta():
@@ -127,12 +215,11 @@ def coletar_dados(root):
             "Usuário SEI": usuario_var.get(),
             "Senha SEI": senha_var.get(),
             "Tipo de Processo": tipo_proc_var.get(),
-            "Tipo do Documento": tipo_doc_var.get(),
-            "Nome do Formulário": form_var.get(),
-            "Campos": campos_str_var.get(),
             "Data Início": data_inicio_var.get(),
             "Data Final": data_final_var.get()
         }
+        if form_var.get().strip():
+            obrigatorios["Campos"] = campos_str_var.get()
 
         # Verifica se algum campo obrigatório está vazio ou apenas com espaços
         vazios = [campo for campo, valor in obrigatorios.items() if not valor.strip()]
@@ -146,6 +233,7 @@ def coletar_dados(root):
         # Se passar na validação, atualiza o dicionário e fecha a janela
         dados.update({
             'usuario': usuario_var.get(), 'senha': senha_var.get(), 'unidade_geradora': unidade_var.get(),
+            'pesquisar_processos': pesquisar_processos_var.get(),
             'tipo_processo': tipo_proc_var.get(), 'tipo_documento': tipo_doc_var.get(),
             'nome_formulario': form_var.get(), 'data_inicio': data_inicio_var.get(),
             'data_final': data_final_var.get(), 'tramitacao': tramitacao_var.get(),
@@ -162,7 +250,7 @@ def coletar_dados(root):
         ok_clicado.set(True)
         dialogo.destroy()
 
-    ttk.Button(frame, text="Iniciar Automação Oculta", command=on_ok).grid(row=13, column=0, columnspan=2, pady=15)
+    ttk.Button(frame, text="Iniciar Automação", command=on_ok).grid(row=13, column=0, columnspan=2, pady=15)
     root.wait_window(dialogo)
     if not ok_clicado.get(): os._exit(0)
     return dados
@@ -192,14 +280,33 @@ def executar_automacao(dados, lb_msg, lb_detalhe, win_status):
         driver.find_element(By.ID, "txtPesquisaRapida").send_keys(Keys.RETURN)
 
         lb_msg.config(text="Aplicando Filtros de Pesquisa...")
-        if dados['unidade_geradora']:
+        if dados.get('pesquisar_processos'):
+            try:
+                # Marca a opção 'Processos' no SEI
+                try:
+                    label_processos = wait.until(EC.element_to_be_clickable((By.ID, "lblProcessos")))
+                    label_processos.click()
+                except Exception:
+                    radio_processos = wait.until(EC.presence_of_element_located((By.ID, "optProcessos")))
+                    if not radio_processos.is_selected():
+                        driver.execute_script("arguments[0].click();", radio_processos)
+                time.sleep(1)
+            except Exception as e:
+                print(f"Não foi possível marcar a opção Processos: {e}")
+
+        if dados.get('unidade_geradora'):
             campo_u = driver.find_element(By.ID, "txtUnidade")
             campo_u.send_keys(dados['unidade_geradora'])
             time.sleep(1)
             campo_u.send_keys(Keys.ARROW_DOWN, Keys.ENTER)
 
-        Select(driver.find_element(By.ID, "selTipoProcedimentoPesquisa")).select_by_visible_text(dados['tipo_processo'])
-        Select(driver.find_element(By.ID, "selSeriePesquisa")).select_by_visible_text(dados['tipo_documento'])
+        if dados.get('tipo_processo', '').strip():
+            elem_proc = wait.until(EC.presence_of_element_located((By.ID, "selTipoProcedimentoPesquisa")))
+            selecionar_opcao(elem_proc, dados['tipo_processo'])
+
+        if dados.get('tipo_documento', '').strip():
+            elem_doc = wait.until(EC.presence_of_element_located((By.ID, "selSeriePesquisa")))
+            selecionar_opcao(elem_doc, dados['tipo_documento'])
         driver.find_element(By.ID, "txtDataInicio").send_keys(dados['data_inicio'])
         driver.find_element(By.ID, "txtDataFim").send_keys(dados['data_final'])
 
@@ -217,6 +324,9 @@ def executar_automacao(dados, lb_msg, lb_detalhe, win_status):
         processos_detalhes = []
         contador = 0
         extrair_tudo = "TODOS" in [c.upper() for c in dados['lista_campos_excel']]
+        apenas_listar_processos = bool(dados.get('pesquisar_processos')) and not bool(dados.get('nome_formulario', '').strip())
+        if apenas_listar_processos:
+            lb_msg.config(text="Modo: Listagem de Processos")
 
         while True:
             tabela = wait.until(EC.presence_of_element_located((By.CLASS_NAME, "pesquisaResultado")))
@@ -264,6 +374,13 @@ def executar_automacao(dados, lb_msg, lb_detalhe, win_status):
                 except Exception:
                     usuario_nome = "Não extraído"
                     data_inc = "Não extraído"
+
+                # Se for apenas listagem de processos, adiciona na lista e segue sem abrir o processo
+                if apenas_listar_processos:
+                    lb_msg.config(text=f"Coletando Processos ({contador} encontrados)")
+                    lb_detalhe.config(text=f"NUP: {num_proc}")
+                    processos_detalhes.append([num_proc, usuario_nome, data_inc])
+                    continue
 
                 if not eh_processo_valido:
                     linha_erro = [num_proc, usuario_nome, data_inc]
@@ -399,17 +516,21 @@ def executar_automacao(dados, lb_msg, lb_detalhe, win_status):
         # Geração do Excel
         wb = Workbook()
         ws = wb.active
-        ws.merge_cells('A1:G1');
-        ws['A1'] = "Relatório de Extração SEI"
-        ws['A1'].font = Font(bold=True, size=14);
+        ws.merge_cells('A1:G1')
+        ws['A1'] = "Relatório de Processos SEI" if apenas_listar_processos else "Relatório de Extração SEI"
+        ws['A1'].font = Font(bold=True, size=14)
         ws['A1'].alignment = Alignment(horizontal="center")
-        ws['A3'], ws['B3'] = "Tipo de Processo:", dados['tipo_processo']
-        ws['A4'], ws['B4'] = "Tipo de Documento:", dados['tipo_documento']
-        ws['A5'], ws['B5'] = "Formulário:", dados['nome_formulario']
+        ws['A3'], ws['B3'] = "Tipo de Processo:", dados.get('tipo_processo', '-') or '-'
+        ws['A4'], ws['B4'] = "Tipo de Documento:", dados.get('tipo_documento', '-') or '-'
+        ws['A5'], ws['B5'] = "Formulário:", dados.get('nome_formulario', '-') or '-'
         ws['A6'], ws['B6'] = "Período:", f"{dados['data_inicio']} - {dados['data_final']}"
         for r in range(3, 7): ws[f'A{r}'].font = Font(bold=True)
 
-        headers = ["NUP SEI", "USUÁRIO DO RESULTADO DA PESQUISA", "DATA INCLUSÃO"] + dados['lista_campos_excel']
+        if apenas_listar_processos:
+            headers = ["NUP SEI", "USUÁRIO DO RESULTADO DA PESQUISA", "DATA INCLUSÃO"]
+        else:
+            headers = ["NUP SEI", "USUÁRIO DO RESULTADO DA PESQUISA", "DATA INCLUSÃO"] + dados.get('lista_campos_excel', [])
+
         for c_idx, h_text in enumerate(headers, 1):
             cell = ws.cell(row=8, column=c_idx, value=h_text)
             cell.font = Font(bold=True)
@@ -420,13 +541,20 @@ def executar_automacao(dados, lb_msg, lb_detalhe, win_status):
                 cell.alignment = Alignment(wrap_text=True, vertical="top")
 
         for col in ws.columns:
-            ws.column_dimensions[get_column_letter(col[0].column)].width = 40
+            ws.column_dimensions[get_column_letter(col[0].column)].width = 35
 
-        nome_f = limpar_nome_arquivo(dados['nome_formulario'])
+        if apenas_listar_processos:
+            nome_base = dados.get('tipo_processo') or "Processos"
+            prefixo = "Relatorio_Processos"
+        else:
+            nome_base = dados.get('nome_formulario') or dados.get('tipo_processo') or "Extracao"
+            prefixo = "Relatorio"
+
+        nome_f = limpar_nome_arquivo(nome_base)
         caminho_final = os.path.join(dados['caminho_salvamento'],
-                                     f"Relatorio_{nome_f}_{datetime.now().strftime('%H-%M')}.xlsx")
+                                     f"{prefixo}_{nome_f}_{datetime.now().strftime('%H-%M')}.xlsx")
         wb.save(caminho_final)
-        messagebox.showinfo("Sucesso", f"Relatório gerado!\n{caminho_final}")
+        messagebox.showinfo("Sucesso", f"Relatório gerado com sucesso ({len(processos_detalhes)} registros)!\n\n{caminho_final}")
 
 
     except Exception as e:
